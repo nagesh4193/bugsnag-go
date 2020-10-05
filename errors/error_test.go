@@ -4,52 +4,103 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"runtime/debug"
+	"strings"
 	"testing"
 )
 
-func TestStackFormatMatches(t *testing.T) {
+// fixture functions doing work to avoid inlining
+func a() error {
+	if b(5) {
+	    return nil
+    }
+    return fmt.Errorf("not gonna happen")
+}
 
+func b(i int) bool {
+    return c(i + 2) > 12
+}
+
+func c(i int) int {
+    if i > 3 {
+	    panic('a')
+    }
+    return i * i
+}
+
+func TestParseStack(t *testing.T) {
 	defer func() {
-		err := recover()
-		if err != 'a' {
-			t.Fatal(err)
+		err := New(recover(), 0)
+        if err.Error() != "97" {
+            t.Errorf("Received incorrect error, expected 'a' got '%s'", err.Error())
+        }
+		if err.TypeName() != "*errors.errorString" {
+			t.Errorf("Error type was '%s'", err.TypeName())
 		}
-
-		bs := [][]byte{Errorf("hi").Stack(), debug.Stack()}
-
-		// Ignore the first line (as it contains the PC of the .Stack() call)
-		bs[0] = bytes.SplitN(bs[0], []byte("\n"), 2)[1]
-		bs[1] = bytes.SplitN(bs[1], []byte("\n"), 2)[1]
-
-		if bytes.Compare(bs[0], bs[1]) != 0 {
-			t.Errorf("Stack didn't match")
-			t.Errorf("%s", bs[0])
-			t.Errorf("%s", bs[1])
+		expected := []StackFrame{
+			StackFrame{Name: "TestParseStack.func1", File: "errors/error_test.go"},
+			StackFrame{Name: "c", File: "errors/error_test.go", LineNumber: 25},
+			StackFrame{Name: "b", File: "errors/error_test.go", LineNumber: 20},
+			StackFrame{Name: "a", File: "errors/error_test.go", LineNumber: 13},
 		}
+        assertStacksMatch(t, expected, err.StackFrames())
 	}()
 
 	a()
 }
 
 func TestSkipWorks(t *testing.T) {
-
 	defer func() {
-		err := recover()
-		if err != 'a' {
-			t.Fatal(err)
+		err := New(recover(), 1)
+        if err.Error() != "97" {
+            t.Errorf("Received incorrect error, expected 'a' got '%s'", err.Error())
+        }
+
+		expected := []StackFrame{
+			StackFrame{Name: "c", File: "errors/error_test.go", LineNumber: 25},
+			StackFrame{Name: "b", File: "errors/error_test.go", LineNumber: 20},
+			StackFrame{Name: "a", File: "errors/error_test.go", LineNumber: 13},
 		}
 
-		bs := [][]byte{New("hi", 2).Stack(), debug.Stack()}
-
-		if !bytes.HasSuffix(bs[1], bs[0]) {
-			t.Errorf("Stack didn't match")
-			t.Errorf("%s", bs[0])
-			t.Errorf("%s", bs[1])
-		}
+        assertStacksMatch(t, expected, err.StackFrames())
 	}()
 
 	a()
+}
+
+func checkFramesMatch(expected StackFrame, actual StackFrame) bool {
+    if actual.Name != expected.Name {
+        return false
+    }
+    // Not using exact match as it would change depending on whether
+    // the package is being tested within or outside of the $GOPATH
+    if expected.File != "" && !strings.HasSuffix(actual.File, expected.File) {
+        return false
+    }
+    if expected.Package != "" && actual.Package != expected.Package {
+        return false
+    }
+    if expected.LineNumber != 0 && actual.LineNumber != expected.LineNumber {
+        return false
+    }
+    return true
+}
+
+func assertStacksMatch(t *testing.T, expected []StackFrame, actual []StackFrame) {
+    var lastmatch int = 0
+    for _, actualFrame := range actual {
+        for index, expectedFrame := range expected {
+            if index < lastmatch {
+                continue
+            }
+            if checkFramesMatch(expectedFrame, actualFrame) {
+                lastmatch = index
+                break
+            }
+        }
+    }
+    if lastmatch != len(expected) - 1 {
+        t.Fatalf("failed to find matches for %d frames: '%v'\ngot: '%v'", len(expected) - lastmatch, expected[lastmatch:], actual)
+    }
 }
 
 type testErrorWithStackFrames struct {
@@ -122,26 +173,4 @@ func ExampleNew_skip() {
 			err = New(err, 1)
 		}
 	}()
-}
-
-func ExampleError_Stack() {
-	e := New("Oh noes!", 1)
-	fmt.Printf("Error: %s\n", e.Error())
-	fmt.Printf("Stack is %d bytes", len(e.Stack()))
-	// Output:
-	// Error: Oh noes!
-	// Stack is 589 bytes
-}
-
-func a() error {
-	b(5)
-	return nil
-}
-
-func b(i int) {
-	c()
-}
-
-func c() {
-	panic('a')
 }
