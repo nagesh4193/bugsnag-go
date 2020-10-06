@@ -16,6 +16,7 @@ type StackFrame struct {
 	Name           string
 	Package        string
 	ProgramCounter uintptr
+    function       *runtime.Func
 }
 
 // NewStackFrame popoulates a stack frame object from the program counter.
@@ -39,7 +40,10 @@ func (frame *StackFrame) Func() *runtime.Func {
 	if frame.ProgramCounter == 0 {
 		return nil
 	}
-	return runtime.FuncForPC(frame.ProgramCounter)
+    if frame.function == nil {
+	    frame.function = runtime.FuncForPC(frame.ProgramCounter)
+    }
+    return frame.function
 }
 
 // String returns the stackframe formatted in the same way as go does
